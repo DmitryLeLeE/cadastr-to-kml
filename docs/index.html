@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Координаты и НСПД ➔ KML / KMZ</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <style>
+    :root { --bg:#f8fafc; --card:#fff; --accent:#2563eb; --text:#0f172a; --muted:#64748b; --border:#e2e8f0; }
+    * { box-sizing: border-box; font-family: "Segoe UI", system-ui, sans-serif; }
+    body { margin: 0; background: var(--bg); color: var(--text); }
+    .wrap { max-width: 1100px; margin: 24px auto; padding: 0 16px; display: grid; grid-template-columns: 440px 1fr; gap: 20px; }
+    @media (max-width: 900px) { .wrap { grid-template-columns: 1fr; } }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+    h1 { margin: 0 0 4px; font-size: 20px; }
+    .sub { color: var(--muted); font-size: 13px; margin-bottom: 16px; }
+    .tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+    .tab { flex: 1; padding: 9px; border: 1px solid var(--border); background: var(--bg); border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 13px; }
+    .tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+    label { display: block; font-size: 13px; font-weight: 600; margin: 12px 0 5px; }
+    input, select, textarea { width: 100%; padding: 9px 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; }
+    textarea { min-height: 140px; font-family: ui-monospace, monospace; resize: vertical; }
+    .row { display: flex; gap: 10px; margin-top: 14px; }
+    button.btn { flex: 1; padding: 10px 14px; border: none; border-radius: 8px; background: var(--accent); color: #fff; font-weight: 600; cursor: pointer; font-size: 14px; }
+    button.btn.secondary { background: #0f172a; }
+    button.btn.outline { background: #fff; color: var(--accent); border: 1px solid var(--accent); }
+    #map { width: 100%; height: 540px; border-radius: 12px; border: 1px solid var(--border); }
+    .status { margin-top: 12px; font-size: 13px; color: var(--muted); white-space: pre-line; }
+    .status.ok { color: #16a34a; }
+    .status.err { color: #dc2626; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>Экспорт границ в KML / KMZ</h1>
+      <div class="sub">Конвертация координат и данных НСПД онлайн</div>
+
+      <div class="tabs">
+        <button class="tab active" onclick="switchTab('coords', this)">Из координат</button>
+        <button class="tab" onclick="switchTab('nspd', this)">Из НСПД (Кадастр)</button>
+      </div>
+
+      <!-- Вкладка 1: Из координат -->
+      <div id="tab-coords">
+        <label>Название объекта</label>
+        <input id="objName" value="Участок" />
+
+        <label>Тип геометрии</label>
+        <select id="geomType">
+          <option value="Polygon">Полигон (замкнутый контур)</option>
+          <option value="LineString">Линия (трек)</option>
+          <option value="Points">Точки (метки)</option>
+        </select>
+
+        <label>Формат входных координат</label>
+        <select id="coordOrder">
+          <option value="latlon">Широта, Долгота (WGS84 — как в Яндекс/Google)</option>
+          <option value="lonlat">Долгота, Широта (WGS84 / GeoJSON)</option>
+          <option value="epsg3857">X, Y в метрах (EPSG:3857 — Web Mercator)</option>
+        </select>
+
+        <label>Координаты (по одной паре на строку)</label>
+        <textarea id="coordsInput" placeholder="55.7558, 37.6173&#10;55.7565, 37.6190&#10;55.7549, 37.6195">52.28697, 104.28066
+52.28740, 104.28190
+52.28650, 104.28220
+52.28620, 104.28090</textarea>
+
+        <div class="row">
+          <button class="btn outline" onclick="previewCoords()">Показать на карте</button>
+        </div>
+      </div>
+
+      <!-- Вкладка 2: Из НСПД -->
+      <div id="tab-nspd" class="hidden">
+        <label>Кадастровый номер</label>
+        <input id="cadnum" value="38:06:144003:4723" />
+
+        <label>Слой поиска (Thematic Search ID)</label>
+        <select id="thematicId">
+          <option value="1">1 - Объекты недвижимости (ЗУ, ОКС)</option>
+          <option value="2">2 - Кадастровое деление</option>
+          <option value="4">4 - Административно-территориальное деление</option>
+          <option value="5">5 - Зоны и территории (ЗОУИТ)</option>
+          <option value="7">7 - Территориальные зоны</option>
+        </select>
+
+        <div id="backendBlock" class="row hidden">
+          <button class="btn" onclick="fetchViaBackend()">Загрузить из НСПД (через сервер)</button>
+        </div>
+
+        <div id="staticHint">
+          <div class="row">
+            <button class="btn outline" onclick="openNspdJson()">1. Открыть JSON в НСПД ↗</button>
+          </div>
+          <label>2. Вставьте полученный JSON (или GeoJSON) сюда</label>
+          <textarea id="nspdJson" placeholder='Вставьте ответ от nspd.gov.ru (Ctrl+A, Ctrl+C на открывшейся вкладке)...'></textarea>
+          <div class="row">
+            <button class="btn outline" onclick="parseNspdJson()">Разобрать JSON и показать</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="row">
+        <button class="btn" onclick="downloadFile('kml')">Скачать KML</button>
+        <button class="btn secondary" onclick="downloadFile('kmz')">Скачать KMZ</button>
+      </div>
+      <div id="status" class="status">Готов к работе</div>
+    </div>
+
+    <div id="map"></div>
+  </div>
+
+<script>
+  const R = 6378137.0;
+  let currentFeature = null;
+  let mapLayer = null;
+
+  const map = L.map("map").setView([55.75, 37.61], 5);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    attribution: "&copy; OpenStreetMap"
+  }).addTo(map);
+
+  // Проверяем, запущен ли FastAPI-бэкенд
+  fetch("/api/health").then(r => {
+    if (r.ok) document.getElementById("backendBlock").classList.remove("hidden");
+  }).catch(() => {});
+
+  function setStatus(msg, cls = "") {
+    const el = document.getElementById("status");
+    el.textContent = msg;
+    el.className = "status " + cls;
+  }
+
+  function switchTab(name, btn) {
+    document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+    btn.classList.add("active");
+    document.getElementById("tab-coords").classList.toggle("hidden", name !== "coords");
+    document.getElementById("tab-nspd").classList.toggle("hidden", name !== "nspd");
+  }
+
+  function toWgs84(x, y) {
+    if (Math.abs(x) > 180 || Math.abs(y) > 90) {
+      const lon = (x / R) * (180 / Math.PI);
+      const lat = (2 * Math.atan(Math.exp(y / R)) - Math.PI / 2) * (180 / Math.PI);
+      return [+lon.toFixed(7), +lat.toFixed(7)];
+    }
+    return [+x.toFixed(7), +y.toFixed(7)];
+  }
+
+  function normalizeGeometry(geom) {
+    const convRing = ring => ring.map(p => toWgs84(p[0], p[1]));
+    if (geom.type === "Point") return { type: "Point", coordinates: toWgs84(geom.coordinates[0], geom.coordinates[1]) };
+    if (geom.type === "LineString") return { type: "LineString", coordinates: convRing(geom.coordinates) };
+    if (geom.type === "MultiPoint") return { type: "MultiPoint", coordinates: convRing(geom.coordinates) };
+    if (geom.type === "Polygon") return { type: "Polygon", coordinates: geom.coordinates.map(convRing) };
+    if (geom.type === "MultiPolygon") return { type: "MultiPolygon", coordinates: geom.coordinates.map(p => p.map(convRing)) };
+    throw new Error("Неподдерживаемый тип геометрии: " + geom.type);
+  }
+
+  function renderOnMap(feature) {
+    currentFeature = feature;
+    if (mapLayer) map.removeLayer(mapLayer);
+    mapLayer = L.geoJSON(feature, {
+      style: { color: "#2563eb", weight: 3, fillOpacity: 0.25 }
+    }).addTo(map);
+    const bounds = mapLayer.getBounds();
+    if (bounds.isValid()) map.fitBounds(bounds, { padding: [30, 30] });
+  }
+
+  function previewCoords() {
+    try {
+      const text = document.getElementById("coordsInput").value.trim();
+      const order = document.getElementById("coordOrder").value;
+      const gtype = document.getElementById("geomType").value;
+      const name = document.getElementById("objName").value.trim() || "object";
+
+      const pts = [];
+      for (const rawLine of text.split(/\r?\n/)) {
+        const line = rawLine.trim();
+        if (!line) continue;
+        const nums = line.replace(/;/g, " ").replace(/,/g, " ").split(/\s+/).map(Number);
+        if (nums.length < 2 || Number.isNaN(nums[0]) || Number.isNaN(nums[1])) {
+          throw new Error("Не удалось разобрать строку: " + line);
+        }
+        let lon, lat;
+        if (order === "latlon") [lat, lon] = [nums[0], nums[1]];
+        else if (order === "lonlat") [lon, lat] = [nums[0], nums[1]];
+        else [lon, lat] = toWgs84(nums[0], nums[1]);
+        pts.push([+lon.toFixed(7), +lat.toFixed(7)]);
+      }
+
+      if (!pts.length) throw new Error("Введите хотя бы одну пару координат.");
+
+      let geometry;
+      if (gtype === "Polygon") {
+        if (pts.length < 3) throw new Error("Для полигона нужно минимум 3 точки.");
+        const ring = [...pts];
+        if (ring[0][0] !== ring[ring.length - 1][0] || ring[0][1] !== ring[ring.length - 1][1]) ring.push(ring[0]);
+        geometry = { type: "Polygon", coordinates: [ring] };
+      } else if (gtype === "LineString") {
+        if (pts.length < 2) throw new Error("Для линии нужно минимум 2 точки.");
+        geometry = { type: "LineString", coordinates: pts };
+      } else {
+        geometry = { type: "MultiPoint", coordinates: pts };
+      }
+
+      renderOnMap({ type: "Feature", properties: { name, description: `Точек: ${pts.length}` }, geometry });
+      setStatus(`✔ Загружено точек: ${pts.length}. Можно скачивать KML/KMZ.`, "ok");
+    } catch (e) {
+      setStatus("Ошибка: " + e.message, "err");
+    }
+  }
+
+  function openNspdJson() {
+    const cadnum = document.getElementById("cadnum").value.trim();
+    const tid = document.getElementById("thematicId").value;
+    if (!cadnum) return setStatus("Введите кадастровый номер", "err");
+    const url = `https://nspd.gov.ru/api/geoportal/v2/search/geoportal?query=${encodeURIComponent(cadnum)}&thematicSearchId=${tid}`;
+    window.open(url, "_blank");
+  }
+
+  function parseNspdJson() {
+    try {
+      const data = JSON.parse(document.getElementById("nspdJson").value);
+      const feat = data?.data?.features?.[0] || data?.features?.[0] || (data.type === "Feature" ? data : null);
+      if (!feat || !feat.geometry) throw new Error("В JSON не найдена геометрия объекта.");
+      const props = feat.properties || {};
+      const opts = props.options || {};
+      const name = opts.cad_num || document.getElementById("cadnum").value.trim() || "nspd_object";
+      const addr = opts.readable_address || props.readable_address || props.address || "Адрес не указан";
+      const geom = normalizeGeometry(feat.geometry);
+      renderOnMap({ type: "Feature", properties: { name, description: `Кадастровый номер: ${name}\nАдрес: ${addr}` }, geometry: geom });
+      setStatus(`✔ Объект распознан:\n${addr}`, "ok");
+    } catch (e) {
+      setStatus("Ошибка разбора JSON: " + e.message, "err");
+    }
+  }
+
+  async function fetchViaBackend() {
+    try {
+      setStatus("Запрос к НСПД через сервер...");
+      const cadnum = document.getElementById("cadnum").value.trim();
+      const tid = document.getElementById("thematicId").value;
+      const res = await fetch(`/api/nspd?cadnum=${encodeURIComponent(cadnum)}&thematic_id=${tid}`);
+      const obj = await res.json();
+      if (!res.ok) throw new Error(obj.detail || "Ошибка сервера");
+      const geom = normalizeGeometry(obj.geometry);
+      renderOnMap({
+        type: "Feature",
+        properties: { name: obj.cadnum, description: `Кадастровый номер: ${obj.cadnum}\nАдрес: ${obj.address}` },
+        geometry: geom
+      });
+      setStatus(`✔ Загружено из НСПД:\n${obj.address}`, "ok");
+    } catch (e) {
+      setStatus("Ошибка: " + e.message, "err");
+    }
+  }
+
+  function escXml(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  function ringToKml(ring) {
+    const pts = [...ring];
+    if (pts.length && (pts[0][0] !== pts[pts.length - 1][0] || pts[0][1] !== pts[pts.length - 1][1])) pts.push(pts[0]);
+    return pts.map(p => `${p[0]},${p[1]},0`).join(" ");
+  }
+
+  function polyToKml(coords) {
+    let xml = `<Polygon><outerBoundaryIs><LinearRing><coordinates>${ringToKml(coords[0])}</coordinates></LinearRing></outerBoundaryIs>`;
+    for (let i = 1; i < coords.length; i++) {
+      xml += `<innerBoundaryIs><LinearRing><coordinates>${ringToKml(coords[i])}</coordinates></LinearRing></innerBoundaryIs>`;
+    }
+    return xml + `</Polygon>`;
+  }
+
+  function buildKml(feature) {
+    const { name = "export", description = "" } = feature.properties || {};
+    const g = feature.geometry;
+    let placemarks = "";
+
+    if (g.type === "MultiPoint") {
+      placemarks = g.coordinates.map((p, idx) => `
+    <Placemark>
+      <name>${escXml(name)} #${idx + 1}</name>
+      <Point><coordinates>${p[0]},${p[1]},0</coordinates></Point>
+    </Placemark>`).join("");
+    } else {
+      let geomXml = "";
+      if (g.type === "Point") geomXml = `<Point><coordinates>${g.coordinates[0]},${g.coordinates[1]},0</coordinates></Point>`;
+      else if (g.type === "LineString") geomXml = `<LineString><tessellate>1</tessellate><coordinates>${g.coordinates.map(p => `${p[0]},${p[1]},0`).join(" ")}</coordinates></LineString>`;
+      else if (g.type === "Polygon") geomXml = polyToKml(g.coordinates);
+      else if (g.type === "MultiPolygon") geomXml = `<MultiGeometry>${g.coordinates.map(polyToKml).join("")}</MultiGeometry>`;
+
+      placemarks = `
+    <Placemark>
+      <name>${escXml(name)}</name>
+      <description>${escXml(description)}</description>
+      <styleUrl>#style1</styleUrl>
+      ${geomXml}
+    </Placemark>`;
+    }
+
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>${escXml(name)}</name>
+    <Style id="style1">
+      <LineStyle><color>ffeb6325</color><width>2.5</width></LineStyle>
+      <PolyStyle><color>4deb6325</color></PolyStyle>
+    </Style>${placemarks}
+  </Document>
+</kml>`;
+  }
+
+  async function downloadFile(fmt) {
+    if (!currentFeature) previewCoords();
+    if (!currentFeature) return;
+
+    const kmlText = buildKml(currentFeature);
+    const safeName = (currentFeature.properties?.name || "export").replace(/[^a-zA-Z0-9а-яА-ЯёЁ_-]/g, "_");
+    let blob;
+
+    if (fmt === "kmz") {
+      const zip = new JSZip();
+      zip.file(`${safeName}.kml`, kmlText);
+      blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE" });
+    } else {
+      blob = new Blob([kmlText], { type: "application/vnd.google-earth.kml+xml;charset=utf-8" });
+    }
+
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `${safeName}.${fmt}`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
+  previewCoords();
+</script>
+</body>
+</html>
